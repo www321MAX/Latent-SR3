@@ -1,6 +1,4 @@
 """
-Latent SR3 完整训练脚本（v3 — DIV2K + Flickr2K 混合配置）
-==========================================================
 两阶段训练：
   Stage 1: 预训练 VAE（MSE重建 + KL散度 + LPIPS感知损失）
   Stage 2: 训练扩散 UNet（Min-SNR-γ 加权噪声预测）
@@ -65,23 +63,21 @@ from model.latent_sr3 import (
 )
 
 
-# ══════════════════════════════════════════════════════════════════
-#  配置（DIV2K + Flickr2K 混合，参数已硬编码为最优默认值）
-# ══════════════════════════════════════════════════════════════════
+#配置
 
 def get_config():
     p = argparse.ArgumentParser(
         description='Latent SR3 Training — DIV2K + Flickr2K 混合配置'
     )
 
-    # ── 模式 ──────────────────────────────────────────────────────
+    #模式
     p.add_argument('--stage', type=str, default='both',
                    choices=['vae', 'diff', 'both'],
                    help='训练阶段: vae / diff / both（默认 both）')
     p.add_argument('--infer', action='store_true',
                    help='推理模式，需同时指定 --ckpt 和 --lr_img')
 
-    # ── 数据路径 ──────────────────────────────────────────────────
+    #数据路径
     p.add_argument('--train_dir', type=str, default='./data/train/Div2K',
                    help='主训练集根目录（含 LR/ HR/ 子目录），默认 DIV2K train')
     p.add_argument('--extra_train_dirs', type=str,
@@ -94,7 +90,7 @@ def get_config():
                    default=True,
                    help='DataLoader pin_memory（大显存卡建议False，减少分配器预留，默认True）')
 
-    # ── 模型结构 ──────────────────────────────────────────────────
+    #模型结构
     p.add_argument('--lr_size',        type=int, default=64)
     p.add_argument('--hr_size',        type=int, default=512)
     p.add_argument('--latent_ch',      type=int, default=8)
@@ -107,7 +103,7 @@ def get_config():
     p.add_argument('--num_timesteps',  type=int, default=1000)
     p.add_argument('--num_res_blocks', type=int, default=2)
 
-    # ── VAE 训练超参（DIV2K+Flickr2K 最优默认值）────────────────
+    #VAE 训练超参
     p.add_argument('--vae_epochs',         type=int,   default=60,
                    help='VAE 训练轮数（默认 60）')
     p.add_argument('--vae_batch',          type=int,   default=8,
@@ -126,7 +122,7 @@ def get_config():
     p.add_argument('--vae_ckpt',           type=str,   default=None,
                    help='已有VAE权重路径，Stage2可直接加载跳过Stage1')
 
-    # ── 扩散模型训练超参（DIV2K+Flickr2K 最优默认值）────────────
+    #扩散模型训练超参
     p.add_argument('--diff_epochs',  type=int,   default=600,
                    help='扩散模型训练轮数（默认 600）')
     p.add_argument('--diff_batch',   type=int,   default=12,
@@ -142,7 +138,7 @@ def get_config():
     p.add_argument('--snr_gamma',    type=float, default=5.0,
                    help='Min-SNR-γ 上限（默认 5.0；设极大值禁用）')
 
-    # ── 数据增强（DIV2K+Flickr2K 适用配置）──────────────────────
+    #数据增强
     p.add_argument('--aug_hflip',        type=lambda x: x.lower()!='false',
                    default=True,  help='随机水平翻转（默认 True）')
     p.add_argument('--aug_vflip',        type=lambda x: x.lower()!='false',
@@ -180,14 +176,14 @@ def get_config():
                         '设为 256 可将显存从 ~12GB 降到 ~3GB。'
                         'VAE 在 patch 上训练，重建质量几乎不受影响（SD同款方案）。')
 
-    # ── 早停 ──────────────────────────────────────────────────────
+    #早停
     p.add_argument('--early_stop_patience',  type=int,   default=50,
                    help='验证loss连续N个epoch无改善则停止（0=禁用）')
     p.add_argument('--early_stop_min_delta', type=float, default=1e-7)
     p.add_argument('--nan_skip_limit',       type=int,   default=5,
                    help='连续NaN batch超限则中止训练')
 
-    # ── 推理 ──────────────────────────────────────────────────────
+    #推理
     p.add_argument('--ckpt',       type=str, default=None,
                    help='推理用模型权重路径')
     p.add_argument('--lr_img',     type=str, default=None,
@@ -197,7 +193,7 @@ def get_config():
     p.add_argument('--ddim_steps', type=int, default=200,
                    help='推理 DDIM 步数（默认 200）')
 
-    # ── 通用 ──────────────────────────────────────────────────────
+    #通用
     p.add_argument('--save_dir',             type=str, default='./checkpoints',
                    help='模型权重保存目录')
     p.add_argument('--save_samples_vae_dir', type=str, default='./samples_vae',
@@ -220,7 +216,7 @@ def get_config():
     p.add_argument('--fp16',   action='store_true',
                    help='启用混合精度训练（推荐，节省显存）')
 
-    # ── 显存优化 ──────────────────────────────────────────────────
+    #显存优化
     p.add_argument('--gradient_checkpointing', action='store_true',
                    help='启用 UNet 梯度检查点（节省约 30-50%% 显存，略微增加计算时间）')
     p.add_argument('--vae_gradient_checkpointing', action='store_true',
@@ -246,10 +242,7 @@ def get_config():
     return cfg
 
 
-# ══════════════════════════════════════════════════════════════════
-#  早停器（与原版一致）
-# ══════════════════════════════════════════════════════════════════
-
+#  早停器
 class EarlyStopping:
     def __init__(self, patience: int = 30, min_delta: float = 1e-7,
                  nan_limit: int = 5):
@@ -299,29 +292,8 @@ class EarlyStopping:
         self.best_epoch = d.get('best_epoch', 0)
 
 
-# ══════════════════════════════════════════════════════════════════
-#  增强版数据集
-# ══════════════════════════════════════════════════════════════════
-
+#  增强数据集
 class PairedSRDataset(Dataset):
-    """
-    增强版配对超分数据集。
-    ─────────────────────────────────────────
-    1. RandomCrop        : 从原图随机裁取 crop_size×crop_size 区域，
-                           极大扩充有效样本多样性（DIV2K 800张→等效数千张）
-    2. ColorJitter       : 亮度/对比度/饱和度/色调随机扰动
-                           VAE/UNet 都受益，提升颜色泛化
-    3. GaussianBlur      : 随机对 LR 施加轻微模糊（模拟真实降质多样性）
-                           HR 不做模糊，让模型学会从模糊LR恢复清晰HR
-    4. GaussianNoise     : 对 LR 加轻微高斯噪声（与模糊二选一/同时使用）
-    5. MixUp             : 两张图线性混合（FFHQ人脸推荐）
-    6. CutMix            : 两张图区域混合（一般自然图像可选）
-
-    注意：ColorJitter / Blur / Noise 只对 HR 归一化前的 PIL 图生效，
-          LR 的降质由独立的 blur/noise 控制，HR 不做此类降质。
-    ─────────────────────────────────────────
-    """
-
     def __init__(
         self,
         pairs: list,
@@ -347,12 +319,10 @@ class PairedSRDataset(Dataset):
         self.augment  = augment
         self.crop_size = crop_size
 
-        # ── 内存缓存 ──────────────────────────────────────────────────
         self._cache: dict      = {}
         self._cache_mode       = cache_in_memory   # 复用参数名，实际存 mode 字符串
         self._cache_enabled    = (cache_in_memory not in ('none', False, None, ''))
 
-        # 增强开关
         self.aug_hflip        = aug_hflip
         self.aug_vflip        = aug_vflip
         self.aug_rotate90     = aug_rotate90
@@ -363,7 +333,6 @@ class PairedSRDataset(Dataset):
         self.aug_mixup        = aug_mixup
         self.aug_cutmix       = aug_cutmix
 
-        # HR 最终 transform（Resize 保底，随机裁剪后不需要缩放到 hr_size）
         self.hr_to_tensor = transforms.Compose([
             transforms.ToTensor(),
             transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
@@ -397,16 +366,13 @@ class PairedSRDataset(Dataset):
     def _prefetch_cache(self):
         """
         按 cache_mode 预载数据：
-          lr_only   : LR 原图 + HR 预缩略图（缩到 crop_size*2）存入 RAM
-                      LR 全集 ~400 MB，HR 缩略图 ~1.5 GB，合计 ~2 GB，30G 内存够用
-                      __getitem__ 拿到小 HR 后直接 crop，无需解码 2K 原图
-          full      : LR+HR 原图全量载入 RAM（需 ≥ 32 GB）
+          lr_only   : LR 原图 + HR 预缩略图
+          full      : LR+HR 原图全量载入 RAM
         """
         import time as _time
         mode = self._cache_mode
         t0   = _time.time()
         n    = len(self.pairs)
-        # lr_only 模式：HR 预缩到 crop_size*2，既省内存又省解码时间
         hr_thumb_size = min(self.crop_size * 2, 1024)
         print(f"  [缓存:{mode}] 预载 {n} 对图像"
               + (f"（HR 缩略 {hr_thumb_size}px）" if mode == 'lr_only' else "")
@@ -419,7 +385,7 @@ class PairedSRDataset(Dataset):
                     hr_img = Image.open(hr_path).convert('RGB')
                     hr_img.load()
                     self._cache[i] = (lr_img, hr_img)
-                else:   # lr_only：HR 预缩略，大幅降低解码和内存开销
+                else:   # lr_only
                     hr_img = Image.open(hr_path).convert('RGB')
                     w, h   = hr_img.size
                     # 等比缩到长边 = hr_thumb_size
@@ -443,33 +409,27 @@ class PairedSRDataset(Dataset):
             print(f" 完成（耗时 {elapsed:.1f}s）")
 
         
-    # ── 内部工具 ─────────────────────────────────────────────────
+    #内部工具
 
     def _load_pair(self, idx):
         """读取一对 LR/HR PIL 图像；按缓存模式从 RAM 或磁盘取。"""
         lr_path, hr_path = self.pairs[idx]
         if self._cache_enabled and idx in self._cache:
             cached_lr, cached_hr = self._cache[idx]
-            # full 模式：HR 是原图；lr_only 模式：HR 是缩略图
-            # 两种情况都直接从 RAM 取，无磁盘 IO
+            # full 模式：HR 是原图；lr_only 模式：HR 是缩略
             return cached_lr.copy(), cached_hr.copy()
-        # 无缓存：全走磁盘
         try:
             lr_img = Image.open(lr_path).convert('RGB')
             hr_img = Image.open(hr_path).convert('RGB')
         except Exception as e:
-            print(f"  ⚠ 读取失败 [{lr_path}]: {e}，使用空白图替代")
+            print(f"   读取失败 [{lr_path}]: {e}，使用空白图替代")
             lr_img = Image.new('RGB', (self.lr_size, self.lr_size))
             hr_img = Image.new('RGB', (self.hr_size, self.hr_size))
         return lr_img, hr_img
 
     def _sync_random_crop(self, hr_img: Image.Image, lr_img: Image.Image):
-        """
-        针对真实配对 LR/HR（如 DIV2K X8）的同步随机裁剪。
-        HR 约 2040×1404，LR 约 255×175，二者严格对齐（像素比 1:8）。
-        """
-        scale = self.hr_size // self.lr_size          # = 8
-        lr_crop_size = self.crop_size // scale         # = 64
+        scale = self.hr_size // self.lr_size          
+        lr_crop_size = self.crop_size // scale         
 
         # 确保 HR 足够大
         w, h = hr_img.size
@@ -496,7 +456,7 @@ class PairedSRDataset(Dataset):
         ly = min(ly, lh - lr_crop_size)
         lr_crop = lr_img.crop((lx, ly, lx + lr_crop_size, ly + lr_crop_size))
 
-        # 若裁剪尺寸已等于训练尺寸则直接返回，避免多余的 BICUBIC resize
+        # 若裁剪尺寸已等于训练尺寸则直接返回
         if hr_crop.size == (self.hr_size, self.hr_size):
             hr_out = hr_crop
         else:
@@ -507,24 +467,15 @@ class PairedSRDataset(Dataset):
             lr_out = lr_crop.resize((self.lr_size, self.lr_size), Image.BICUBIC)
         return hr_out, lr_out
 
-    # _apply_blur / _apply_noise 已迁移到 __getitem__ Tensor 空间（快 5-10×）
-
-    # _apply_color_jitter 已迁移到 _tensor_color_jitter（Tensor 空间，快 5-10×）
-
-    # ── MixUp / CutMix（在 Tensor 空间操作）────────────────────
+    #MixUp / CutMix
 
     def _mixup(self, hr1, lr1, hr2, lr2, alpha=0.4):
-        """MixUp: 两对图像线性混合，alpha 控制混合比例分布。"""
         lam = np.random.beta(alpha, alpha)
         hr  = lam * hr1 + (1 - lam) * hr2
         lr  = lam * lr1 + (1 - lam) * lr2
         return hr, lr
 
     def _cutmix(self, hr1, lr1, hr2, lr2, alpha=1.0):
-        """
-        CutMix: 从 img2 随机裁取一块贴到 img1。
-        HR 和 LR 的裁取区域按比例对齐。
-        """
         lam = np.random.beta(alpha, alpha)
         _, H, W = hr1.shape
 
@@ -551,13 +502,7 @@ class PairedSRDataset(Dataset):
 
         return hr, lr
 
-    # ── __getitem__ ──────────────────────────────────────────────
-
     def _load_and_transform(self, idx) -> tuple:
-        """
-        仅加载、几何增强、转 Tensor，不含 MixUp/CutMix。
-        供 __getitem__ 和 MixUp/CutMix 内部调用，避免递归。
-        """
         lr_img, hr_img = self._load_pair(idx)
 
         if not self.augment:
@@ -610,10 +555,9 @@ class PairedSRDataset(Dataset):
     def __getitem__(self, idx):
         lr_t, hr_t = self._load_and_transform(idx)
 
-        # MixUp / CutMix：调用 _load_and_transform 而非 __getitem__，避免递归
         if (self.aug_mixup or self.aug_cutmix) and self.augment and random.random() > 0.5:
             idx2 = random.randint(0, len(self.pairs) - 1)
-            lr2_t, hr2_t = self._load_and_transform(idx2)  # ✅ 不再递归
+            lr2_t, hr2_t = self._load_and_transform(idx2)  
             if self.aug_mixup:
                 hr_t, lr_t = self._mixup(hr_t, lr_t, hr2_t, lr2_t)
             else:
@@ -621,15 +565,7 @@ class PairedSRDataset(Dataset):
 
         return lr_t, hr_t
 
-    def _tensor_color_jitter(self, hr_t: torch.Tensor,
-                              lr_t: torch.Tensor):
-        """
-        在 Tensor 空间同步做颜色扰动（[-1,1] 值域）。
-        比 PIL ColorJitter 快 5-10×，因为全向量化无逐像素循环。
-        跳过 hue 调整（hue 需要 RGB→HSV 转换，PIL 里是最慢的操作）。
-        brightness/contrast/saturation 用简单线性运算实现。
-        """
-        # brightness: 加法偏移
+    def _tensor_color_jitter(self, hr_t: torch.Tensor, lr_t: torch.Tensor):
         if random.random() > 0.5:
             factor = random.uniform(-0.2, 0.2)
             hr_t = (hr_t + factor).clamp(-1, 1)
@@ -646,7 +582,6 @@ class PairedSRDataset(Dataset):
         # saturation: 向灰度图收缩/扩张
         if random.random() > 0.5:
             factor = random.uniform(0.8, 1.2)
-            # 灰度 = 0.299R + 0.587G + 0.114B
             w = torch.tensor([0.299, 0.587, 0.114],
                               device=hr_t.device).view(3, 1, 1)
             hr_gray = (hr_t * w).sum(0, keepdim=True)
@@ -654,16 +589,15 @@ class PairedSRDataset(Dataset):
             hr_t = ((hr_t - hr_gray) * factor + hr_gray).clamp(-1, 1)
             lr_t = ((lr_t - lr_gray) * factor + lr_gray).clamp(-1, 1)
 
-        # hue: RGB → 旋转色相 → RGB（Tensor 实现，无需 PIL）
+        # hue: RGB -> 旋转色相 -> RGB
         if random.random() > 0.7:
-            angle = random.uniform(-0.05, 0.05) * math.pi * 2   # ±5% 色相旋转
+            angle = random.uniform(-0.05, 0.05) * math.pi * 2   
             cos_a, sin_a = math.cos(angle), math.sin(angle)
-            # Rodrigues 旋转矩阵（在颜色空间的灰轴旋转）
             mat = torch.tensor([
                 [cos_a + (1-cos_a)/3,       (1-cos_a)/3 - sin_a/math.sqrt(3),  (1-cos_a)/3 + sin_a/math.sqrt(3)],
                 [(1-cos_a)/3 + sin_a/math.sqrt(3), cos_a + (1-cos_a)/3,        (1-cos_a)/3 - sin_a/math.sqrt(3)],
                 [(1-cos_a)/3 - sin_a/math.sqrt(3), (1-cos_a)/3 + sin_a/math.sqrt(3), cos_a + (1-cos_a)/3],
-            ], device=hr_t.device, dtype=hr_t.dtype)  # (3,3)
+            ], device=hr_t.device, dtype=hr_t.dtype)  
 
             def _apply_hue(t):
                 C, H, W = t.shape
@@ -676,14 +610,11 @@ class PairedSRDataset(Dataset):
         return hr_t, lr_t
 
     @staticmethod
-    def _tensor_gaussian_blur(x: torch.Tensor,
-                               kernel_size: int = 3) -> torch.Tensor:
-        """用可分离 box filter 近似高斯模糊，纯 Tensor，无 PIL。"""
+    def _tensor_gaussian_blur(x: torch.Tensor, kernel_size: int = 3) -> torch.Tensor:
         # box filter 权重
         k = torch.ones(1, 1, kernel_size, 1, device=x.device) / kernel_size
         C = x.shape[0]
         x = x.unsqueeze(0)   # (1,C,H,W)
-        # 先行后列，逐通道（groups=C）
         k_h = k.expand(C, 1, kernel_size, 1)
         k_w = k.permute(0, 1, 3, 2).expand(C, 1, 1, kernel_size)
         pad = kernel_size // 2
@@ -695,12 +626,9 @@ class PairedSRDataset(Dataset):
         return len(self.pairs)
 
 
-# ══════════════════════════════════════════════════════════════════
-#  数据集构建工具
-# ══════════════════════════════════════════════════════════════════
+#数据集构建工具
 
 def collect_pairs(root: str) -> list:
-    """扫描 root/LR/ 和 root/HR/ 下的配对文件。"""
     lr_dir = os.path.join(root, 'LR')
     hr_dir = os.path.join(root, 'HR')
     if not os.path.isdir(lr_dir):
@@ -722,7 +650,7 @@ def collect_pairs(root: str) -> list:
             missing.append(fname)
 
     if missing:
-        print(f"  ⚠ {len(missing)} 个LR缺少配对HR（已跳过）")
+        print(f"  {len(missing)} 个LR缺少配对HR（已跳过）")
 
     valid_pairs = []
     for lr_path, hr_path in pairs:
@@ -731,31 +659,26 @@ def collect_pairs(root: str) -> list:
                 lr_w, lr_h = img.size
             with Image.open(hr_path) as img:
                 hr_w, hr_h = img.size
-            # 检查比例是否为 8×（允许±1像素误差）
+            # 检查比例是否正确（允许±1像素误差）
             if abs(hr_w / lr_w - 8) > 0.5 or abs(hr_h / lr_h - 8) > 0.5:
-                print(f"  ⚠ 比例异常跳过: {os.path.basename(lr_path)} "
+                print(f"  比例异常跳过: {os.path.basename(lr_path)} "
                       f"LR={lr_w}×{lr_h} HR={hr_w}×{hr_h}")
                 continue
             valid_pairs.append((lr_path, hr_path))
         except Exception:
             continue
-    print(f"  → 有效配对: {len(valid_pairs)} / {len(pairs)}")
+    print(f"  -> 有效配对: {len(valid_pairs)} / {len(pairs)}")
     return valid_pairs
 
 
 def build_datasets(cfg):
-    """
-    构建训练/验证数据集。
-    主训练集 = cfg.train_dir；
-    额外训练集 = cfg.extra_train_dirs（逗号分隔，留空则不追加）。
-    """
-    print("\n[数据加载] DIV2K + Flickr2K 混合")
+    print("\n[数据加载] ")
 
-    # ── 主训练集 ──
+    #主训练集
     print(f"  扫描主训练集: {cfg.train_dir}")
     train_pairs = collect_pairs(cfg.train_dir)
 
-    # ── 额外训练集 ──
+    #额外训练集
     if cfg.extra_train_dirs:
         for extra_dir in cfg.extra_train_dirs.split(','):
             extra_dir = extra_dir.strip()
@@ -763,15 +686,14 @@ def build_datasets(cfg):
                 print(f"  扫描额外训练集: {extra_dir}")
                 extra_pairs = collect_pairs(extra_dir)
                 train_pairs += extra_pairs
-                print(f"    → 追加 {len(extra_pairs)} 对")
+                print(f"    -> 追加 {len(extra_pairs)} 对")
 
-    # ── 验证集 ──
+    #验证集
     print(f"  扫描验证集: {cfg.valid_dir}")
     valid_pairs = collect_pairs(cfg.valid_dir)
 
     print(f"  训练总对数: {len(train_pairs)}  验证对数: {len(valid_pairs)}")
 
-    # ── 公共增强参数 ──
     aug_kwargs = dict(
         aug_hflip        = cfg.aug_hflip,
         aug_vflip        = cfg.aug_vflip,
@@ -799,9 +721,7 @@ def build_datasets(cfg):
     return train_ds, val_ds
 
 
-# ══════════════════════════════════════════════════════════════════
-#  EMA
-# ══════════════════════════════════════════════════════════════════
+#EMA
 
 class EMA:
     def __init__(self, model: nn.Module, decay: float = 0.9999,
@@ -816,12 +736,12 @@ class EMA:
     @torch.no_grad()
     def update(self, model: nn.Module):
         self._step += 1
-        # 预热期间跳过权重复制，仅更新步数计数（减少显存占用）
+        # 预热期间跳过权重复制，仅更新步数计数
         if self.lazy_ema and self._step < self.lazy_ema_warmup:
             return
         for k, v in model.state_dict().items():
             if torch.isnan(v).any() or torch.isinf(v).any():
-                print(f"  ⚠ EMA跳过更新：参数 {k} 含有NaN/Inf")
+                print(f"   EMA跳过更新：参数 {k} 含有NaN/Inf")
                 continue
             self.shadow[k] = self.decay * self.shadow[k] + (1 - self.decay) * v
 
@@ -838,15 +758,12 @@ class EMA:
         self.shadow = sd
 
 
-# ══════════════════════════════════════════════════════════════════
-#  STAGE 1: VAE 预训练
-# ══════════════════════════════════════════════════════════════════
+#STAGE 1: VAE 预训练
 
 class VAETrainer:
     """
     Stage 1: VAE 预训练。
     损失 = MSE重建 + β·KL + λ_lpips·LPIPS感知损失
-    验证时同时输出 PSNR / SSIM。
     """
     def __init__(self, cfg, train_loader, val_loader, writer):
         self.cfg          = cfg
@@ -872,7 +789,7 @@ class VAETrainer:
             use_checkpoint=use_ckpt,
         ).to(self.device)
 
-        # ── LPIPS 感知损失（CPU offload 模式，避免 VGG16 ~500MB 常驻 GPU）──
+        #LPIPS 感知损失
         self.lpips_weight = getattr(cfg, 'vae_lpips_weight', 0.0) or 0.0
         if self.lpips_weight > 0:
             self.lpips_fn = LPIPSLoss().to(self.device).eval()
@@ -896,7 +813,7 @@ class VAETrainer:
             min_delta = cfg.early_stop_min_delta,
             nan_limit = cfg.nan_skip_limit,
         )
-        # ── 分阶段样本目录 ──
+        #分阶段样本目录
         self.sample_dir = getattr(cfg, 'save_samples_vae_dir', './samples_vae')
         os.makedirs(cfg.save_dir,    exist_ok=True)
         os.makedirs(self.sample_dir, exist_ok=True)
@@ -930,7 +847,6 @@ class VAETrainer:
         l_kl     = -0.5 * torch.mean(1 + logvar_f - mean_f.pow(2) - logvar_f.exp())
 
         loss = l_recon + self.cfg.vae_kl_weight * l_kl
-        # LPIPS 不在此处计算，由 train() 在 autocast 外单独调用
         return loss, l_recon, l_kl, recon
 
     def train(self):
@@ -943,7 +859,6 @@ class VAETrainer:
               f"  lpips_weight={self.lpips_weight}")
         print(f"  有效输入分辨率: {eff_size}×{eff_size}  "
               f"(vae_patch_size={'disabled' if vae_patch==0 else vae_patch})")
-        # 显示当前显存状态，便于诊断
         if torch.cuda.is_available():
             alloc  = torch.cuda.memory_allocated()  / 1024**3
             reserv = torch.cuda.memory_reserved()   / 1024**3
@@ -958,7 +873,7 @@ class VAETrainer:
 
             vae_accum   = getattr(self.cfg, 'vae_accum_steps', 1)
             lpips_every = getattr(self.cfg, 'vae_lpips_every', 10)
-            data_time = gpu_time = 0.0   # 前5个batch计时，诊断瓶颈
+            data_time = gpu_time = 0.0   
             t_data = time.time()
             for batch_idx, (_, hr) in enumerate(self.train_loader):
                 if batch_idx < 5:
@@ -975,7 +890,7 @@ class VAETrainer:
                     with torch.amp.autocast(device_type, enabled=self.cfg.fp16):
                         loss, l_recon, l_kl, recon = self.vae_loss(hr)
 
-                    # LPIPS 在 autocast 外，全 float32，无精度污染
+                    # LPIPS 在 autocast 外，全 float32
                     l_lpips = torch.tensor(0.0, device=self.device)
                     if do_lpips:
                         l_lpips = self.lpips_fn(
@@ -1030,7 +945,7 @@ class VAETrainer:
                     torch.cuda.empty_cache()                                 
                     self.optimizer.zero_grad(set_to_none=True)              
                     skipped += 1                                             
-                    print(f"  ⚠ OOM: epoch={epoch} batch={batch_idx} 已跳过，显存已清理", flush=True) 
+                    print(f"  ！！ OOM: epoch={epoch} batch={batch_idx} 已跳过，显存已清理", flush=True) 
                     continue                                                 
 
                 if batch_idx < 5:
@@ -1048,7 +963,7 @@ class VAETrainer:
                 t_data = time.time()   # 重置 data 计时
 
             n = max(len(self.train_loader) - skipped, 1)
-            # epoch 结束后所有 batch 张量已离开作用域，此时 empty_cache 真正有效
+            # epoch 结束后所有 batch 张量已离开作用域
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             val_loss, val_psnr, val_ssim = self.validate()
@@ -1065,7 +980,7 @@ class VAETrainer:
             if val_loss < self.best_val:
                 self.best_val = val_loss
                 path = self._save('best')
-                print(f"    ✓ 最优模型已保存: {path}")
+                print(f"     最优模型已保存: {path}")
 
             if epoch % self.cfg.save_every == 0:
                 self._save(f'epoch{epoch:03d}')
@@ -1114,7 +1029,7 @@ class VAETrainer:
                     del loss, recon, hr  
             except torch.cuda.OutOfMemoryError:                              
                 torch.cuda.empty_cache()                                      
-                print("  ⚠ validate OOM，跳过此batch，显存已清理", flush=True)  
+                print("  ！！ validate OOM，跳过此batch，显存已清理", flush=True)  
                 continue                                                     
         n = max(cnt, 1)
         return total_loss / n, total_psnr / n, total_ssim / n
@@ -1146,16 +1061,13 @@ class VAETrainer:
             print(f" VAE _log_samples OOM，跳过样本保存 (epoch={epoch})", flush=True)
 
 
-# ══════════════════════════════════════════════════════════════════
-#  STAGE 2: 扩散模型训练
-# ══════════════════════════════════════════════════════════════════
+#STAGE 2: 扩散模型训练
 
 class DiffusionTrainer:
     """
     Stage 2: 扩散 UNet 训练。
-    • 损失使用 Min-SNR-γ 加权（由 latent_sr3.LatentSR3.forward 内部处理）
-    • validate() 同时输出 PSNR / SSIM（通过解码预测 x0 与真实 HR 对比）
-    • 样本图保存到 samples_sr3/ 专属目录
+    • 损失使用 Min-SNR-γ 加权
+    • 样本图保存到 samples_sr3/ 
     """
     def __init__(self, cfg, train_loader, val_loader, writer):
         self.cfg          = cfg
@@ -1165,7 +1077,7 @@ class DiffusionTrainer:
         self.writer       = writer
         self.accum_steps = getattr(cfg, "diff_accum_steps", 4)
 
-        # snr_gamma: 从 cfg 读取，默认 5.0
+        # snr_gamma: 从 cfg 读取
         snr_gamma = getattr(cfg, 'snr_gamma', 5.0)
 
         self.model = LatentSR3(
@@ -1219,7 +1131,7 @@ class DiffusionTrainer:
             min_delta = cfg.early_stop_min_delta,
             nan_limit = cfg.nan_skip_limit,
         )
-        # ── 分阶段样本目录 ──
+        #分阶段样本目录
         self.sample_dir = getattr(cfg, 'save_samples_sr3_dir', './samples_sr3')
         os.makedirs(cfg.save_dir,    exist_ok=True)
         os.makedirs(self.sample_dir, exist_ok=True)
@@ -1237,9 +1149,6 @@ class DiffusionTrainer:
         for p in self.model.encoder.parameters():
             p.requires_grad_(False)
         for p in self.model.decoder.parameters():
-            p.requires_grad_(False)
-        # 如果想让 LREncoder 在 Stage2 联合优化，注释掉下面两行
-        for p in self.model.lr_encoder.parameters():
             p.requires_grad_(False)
 
         total = sum(p.numel() for p in self.model.unet.parameters()
@@ -1364,7 +1273,7 @@ class DiffusionTrainer:
             if stop_flag:
                 print("  训练中止（连续NaN过多）。"); break
 
-            # epoch 结束，batch 张量已释放，此时 empty_cache 有效
+            # epoch 结束，batch 张量已释放
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
@@ -1392,7 +1301,7 @@ class DiffusionTrainer:
             if val_loss < self.best_val:
                 self.best_val = val_loss
                 self._save(epoch, 'best')
-                print(f"    ✓ 最优模型已保存 (val={val_loss:.5f} "
+                print(f"     最优模型已保存 (val={val_loss:.5f} "
                       f"PSNR={val_psnr:.2f}dB SSIM={val_ssim:.4f})")
 
             if epoch % self.cfg.save_every == 0:
@@ -1408,19 +1317,11 @@ class DiffusionTrainer:
 
     @torch.no_grad()
     def validate(self):
-        """
-        返回 (val_loss, mean_psnr, mean_ssim)。
-
-        PSNR/SSIM 计算方式：
-          对每个验证样本，使用 t=T//4（低噪声区）预测一步 x0，
-          解码后与真实 HR 对比。这比全步 DDIM 推理快得多，
-          同时能反映模型对细节的还原能力趋势。
-        """
         self.model.eval()
         total_loss = total_psnr = total_ssim = 0.0
         cnt = 0
 
-        T_eval = self.model.T // 4   # 选低噪声时间步，x0预测更准
+        T_eval = self.model.T // 4  
 
         for lr_img, hr_img in self.val_loader:
             try:
@@ -1489,7 +1390,7 @@ class DiffusionTrainer:
                 self.model.lr_encoder.eval()
                 return
 
-            # 计算样本 PSNR/SSIM 并打印（直观评估质量进展）
+            # 计算样本 PSNR/SSIM 并打印
             sample_psnr = compute_psnr(sr, hr_imgs)
             sample_ssim = compute_ssim(sr, hr_imgs)
             self.writer.add_scalar('SR/sample_psnr', sample_psnr, epoch)
@@ -1498,8 +1399,6 @@ class DiffusionTrainer:
             lr_up = F.interpolate(lr_imgs, size=(self.cfg.hr_size, self.cfg.hr_size),
                                 mode='bicubic', align_corners=False)
             B = lr_imgs.size(0)
-            # 先将三组图在 batch 维度交错排列：[lr0,sr0,gt0, lr1,sr1,gt1, ...]
-            # 方便肉眼逐列比较同一样本的 bicubic / SR / GT
             interleaved = torch.stack(
                 [lr_up, sr, hr_imgs], dim=1          # (B, 3, C, H, W)
             ).reshape(-1, *sr.shape[1:])             # (B*3, C, H, W)
@@ -1511,7 +1410,7 @@ class DiffusionTrainer:
                 interleaved_cpu.clamp(-1, 1) * 0.5 + 0.5,
                 nrow=3,         # 每行固定：bicubic | SR | GT
                 padding=4,
-                pad_value=0.5,  # 灰色分隔线，更易区分
+                pad_value=0.5,  
             )
             del interleaved_cpu
             self.writer.add_image('SR/bicubic_vs_sr_vs_gt', grid, epoch)
@@ -1533,9 +1432,7 @@ class DiffusionTrainer:
             self.model.lr_encoder.eval()
 
 
-# ══════════════════════════════════════════════════════════════════
-#  推理
-# ══════════════════════════════════════════════════════════════════
+#推理
 
 @torch.no_grad()
 def run_inference(cfg):
@@ -1586,9 +1483,6 @@ def run_inference(cfg):
     print(f"  结果已保存: {cfg.out}")
 
 
-# ══════════════════════════════════════════════════════════════════
-#  主函数
-# ══════════════════════════════════════════════════════════════════
 
 def set_seed(seed):
     random.seed(seed); np.random.seed(seed)
@@ -1601,7 +1495,7 @@ def main():
     sys.stdout.reconfigure(line_buffering=True)
     cfg = get_config()
 
-    # 设置 CUDA 分配器碎片控制（必须在任何 CUDA 调用之前）
+    # 设置 CUDA 分配器碎片控制
     max_mb = getattr(cfg, 'max_alloc_mb', 0)
     if max_mb > 0:
         import os as _os
@@ -1628,7 +1522,7 @@ def main():
     if cfg.extra_train_dirs:
         print(f"  extra ={cfg.extra_train_dirs}")
     print(f"  valid ={cfg.valid_dir}")
-    print(f"  LR={cfg.lr_size}×{cfg.lr_size} → HR={cfg.hr_size}×{cfg.hr_size}")
+    print(f"  LR={cfg.lr_size}×{cfg.lr_size} -> HR={cfg.hr_size}×{cfg.hr_size}")
     print(f"  增强: hflip={cfg.aug_hflip} vflip={cfg.aug_vflip} "
           f"rotate={cfg.aug_rotate90} crop={cfg.aug_random_crop}")
     print(f"        color={cfg.aug_color_jitter} blur={cfg.aug_blur} "
@@ -1638,8 +1532,8 @@ def main():
           f"  patch={getattr(cfg,'vae_patch_size',0) or cfg.hr_size}px")
     print(f"  Diff: epochs={cfg.diff_epochs} batch={cfg.diff_batch} "
           f"lr={cfg.diff_lr} snr_gamma={cfg.snr_gamma}")
-    print(f"  样本目录: VAE→{cfg.save_samples_vae_dir}  "
-          f"SR→{cfg.save_samples_sr3_dir}")
+    print(f"  样本目录: VAE->{cfg.save_samples_vae_dir}  "
+          f"SR->{cfg.save_samples_sr3_dir}")
     print("═" * 60)
 
     if cfg.infer:
@@ -1652,7 +1546,7 @@ def main():
 
     writer = SummaryWriter(log_dir=cfg.log_dir)
 
-    # ── 按 stage 按需构建数据集，避免重复预载 ──────────────────────
+    # 按 stage 按需构建数据集，避免重复预载
     # stage=vae  : 只构建 VAE 专用数据集（可能是小 patch），不构建 512px 全集
     # stage=diff : 只构建 512px 全集
     # stage=both : 先构建 VAE 专用集，VAE 训完后再构建 Diff 全集（顺序释放内存）
@@ -1660,7 +1554,7 @@ def main():
 
     vae_ckpt_path = cfg.vae_ckpt
     if cfg.stage in ('vae', 'both'):
-        # ── VAE 专用小分辨率数据集 ──────────────────────────────────
+        #VAE 专用小分辨率数据集
         vae_patch = getattr(cfg, 'vae_patch_size', 0)
         if vae_patch > 0:
             vae_cfg = type('_', (), {})()
@@ -1693,7 +1587,7 @@ def main():
             train_ds = val_ds = None   # 触发 Diff 阶段重新构建
 
     if cfg.stage in ('diff', 'both'):
-        # 如果没有可复用的全集数据集（vae 用了 patch 模式），重新构建
+        # 如果没有可复用的全集数据集，重新构建
         if train_ds is None:
             train_ds, val_ds = build_datasets(cfg)
 
