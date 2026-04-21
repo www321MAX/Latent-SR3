@@ -13,18 +13,12 @@ from typing import Optional, Tuple, List
 import os
 
 
-# ═══════════════════════════════════════════════════════════════
-#  度量工具：PSNR / SSIM
-# ═══════════════════════════════════════════════════════════════
+#PSNR / SSIM
 
 def compute_psnr(pred: torch.Tensor, target: torch.Tensor,
                  data_range: float = 2.0) -> float:
     """
-    计算 PSNR（Peak Signal-to-Noise Ratio）。
-
-    pred / target : (B, C, H, W)，值域 [-1, 1]（data_range=2.0）
-    返回 batch 均值，单位 dB。
-    典型参考值：SR任务 27~32 dB 为可接受，>32 dB 为优秀。
+    计算 PSNR
     """
     mse = F.mse_loss(pred, target, reduction='none')
     mse = mse.mean(dim=[1, 2, 3])                   # (B,)
@@ -36,12 +30,7 @@ def compute_ssim(pred: torch.Tensor, target: torch.Tensor,
                  window_size: int = 11,
                  data_range: float = 2.0) -> float:
     """
-    计算 SSIM（Structural Similarity Index）。
-
-    实现为单尺度高斯窗口 SSIM，逐通道计算后取均值。
-    pred / target : (B, C, H, W)，值域 [-1, 1]
-    返回 batch 均值，范围 [0, 1]，越大越好。
-    典型参考值：>0.85 为可接受，>0.92 为优秀。
+    计算 SSIM
     """
     C1 = (0.01 * data_range) ** 2
     C2 = (0.03 * data_range) ** 2
@@ -80,21 +69,9 @@ def compute_ssim(pred: torch.Tensor, target: torch.Tensor,
     return ssim_map.mean().item()
 
 
-# ═══════════════════════════════════════════════════════════════
-#  LPIPS 感知损失包装
-# ═══════════════════════════════════════════════════════════════
-
 class LPIPSLoss(nn.Module):
     """
-    轻量 LPIPS（Learned Perceptual Image Patch Similarity）包装。
-
-    内部使用 VGG16 前三个特征块计算特征距离，不依赖额外库。
-    输入值域 [-1, 1]，内部自动归一化到 ImageNet 均值/标准差。
-
-    若需要完整 LPIPS（alex/vgg 预训练权重），可安装 lpips 库并替换本类：
-        import lpips
-        self.lpips_fn = lpips.LPIPS(net='vgg').to(device)
-        loss = self.lpips_fn(pred, target).mean()
+    轻量 LPIPS
     """
 
     def __init__(self):
@@ -123,7 +100,7 @@ class LPIPSLoss(nn.Module):
 
     def _normalize(self, x: torch.Tensor) -> torch.Tensor:
         """[-1,1] -> ImageNet-normalized."""
-        x = (x + 1.0) / 2.0          # -> [0,1]
+        x = (x + 1.0) / 2.0          #[0,1]
         return (x - self.mean) / self.std
 
     def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
@@ -147,12 +124,7 @@ class LPIPSLoss(nn.Module):
         return loss
 
 
-# ═══════════════════════════════════════════════════════════════
-#  Utility: Sinusoidal Timestep Embedding
-# ═══════════════════════════════════════════════════════════════
-
 class SinusoidalPositionEmbeddings(nn.Module):
-    """Maps scalar timestep t -> embedding vector of dim `dim`."""
 
     def __init__(self, dim: int):
         super().__init__()
@@ -168,17 +140,7 @@ class SinusoidalPositionEmbeddings(nn.Module):
         return embeddings
 
 
-# ═══════════════════════════════════════════════════════════════
-#  Basic Blocks
-# ═══════════════════════════════════════════════════════════════
-
 class ResidualBlock(nn.Module):
-    """
-    ResNet-style block with time-FiLM and optional condition injection.
-
-    cond_ch > 0 时，通过 1×1 卷积将条件投影到 in_ch，以加法注入。
-    支持梯度检查点（use_checkpoint=True）以节省显存。
-    """
 
     def __init__(self, in_ch: int, out_ch: int, time_emb_dim: int,
                  cond_ch: int = 0, groups: int = 8, dropout: float = 0.1,
@@ -201,7 +163,7 @@ class ResidualBlock(nn.Module):
 
     def _forward(self, x: torch.Tensor, time_emb: torch.Tensor,
                  cond: Optional[torch.Tensor] = None) -> torch.Tensor:
-        # ── 条件注入（加法，空间对齐后直接加到 x）──
+        #条件注入
         if cond is not None and self.cond_proj is not None:
             assert cond.shape[-2:] == x.shape[-2:], \
                 f"cond shape {cond.shape} != x shape {x.shape}, should be pre-aligned"
@@ -211,7 +173,7 @@ class ResidualBlock(nn.Module):
         h = F.silu(h)
         h = self.conv1(h)
 
-        # time scale + shift (FiLM conditioning)
+        # time scale + shift 
         t = self.time_mlp(time_emb)[:, :, None, None]
         scale, shift = t.chunk(2, dim=1)
         h = self.norm2(h) * (1 + scale) + shift
@@ -224,7 +186,6 @@ class ResidualBlock(nn.Module):
     def forward(self, x: torch.Tensor, time_emb: torch.Tensor,
                 cond: Optional[torch.Tensor] = None) -> torch.Tensor:
         if self.use_checkpoint and x.requires_grad:
-            # checkpoint 不支持 None 参数，需转为哨兵张量
             if cond is None:
                 cond_in = torch.zeros(1, device=x.device, requires_grad=False)
                 def _ckpt_fn(x_, te_, _dummy):
@@ -240,7 +201,6 @@ class ResidualBlock(nn.Module):
 
 
 class AttentionBlock(nn.Module):
-    """Multi-head self-attention，使用 F.scaled_dot_product_attention（Flash Attention）。"""
 
     def __init__(self, ch: int, num_heads: int = 4, groups: int = 8):
         super().__init__()
@@ -269,8 +229,6 @@ class AttentionBlock(nn.Module):
 class CrossAttentionCondBlock(nn.Module):
     """
     将 LR latent 条件以 Cross-Attention 方式注入到特征图。
-    query  = 主特征 h（经 GroupNorm）
-    key/value = LR 条件 cond（经线性投影）
     """
     def __init__(self, feat_ch: int, cond_ch: int,
                  num_heads: int = 4, groups: int = 8):
@@ -286,7 +244,7 @@ class CrossAttentionCondBlock(nn.Module):
         self.k_proj = nn.Conv2d(cond_ch, feat_ch, 1)
         self.v_proj = nn.Conv2d(cond_ch, feat_ch, 1)
         self.out_proj = nn.Conv2d(feat_ch, feat_ch, 1, bias=False)
-        nn.init.zeros_(self.out_proj.weight)   # 零初始化，训练初期不破坏主路径
+        nn.init.zeros_(self.out_proj.weight)   # 零初始化
 
     def forward(self, h: torch.Tensor, cond: torch.Tensor) -> torch.Tensor:
         B, C, H, W = h.shape
@@ -326,10 +284,7 @@ class Upsample(nn.Module):
         return self.conv(x)
 
 
-# ═══════════════════════════════════════════════════════════════
-#  Conditional UNet（改：LR 条件注入所有层级）
-# ═══════════════════════════════════════════════════════════════
-
+#  Conditional UNet
 class ConditionalUNet(nn.Module):
     """
     UNet denoising backbone，LR 条件注入所有层级每个 ResidualBlock。
@@ -354,7 +309,7 @@ class ConditionalUNet(nn.Module):
         self.use_checkpoint = use_checkpoint
         self.cond_ch     = cond_ch
 
-        # ── 时间嵌入 MLP ──
+        #时间嵌入 MLP
         self.time_embed = nn.Sequential(
             SinusoidalPositionEmbeddings(base_ch),
             nn.Linear(base_ch, time_emb_dim),
@@ -367,7 +322,7 @@ class ConditionalUNet(nn.Module):
         channels   = [base_ch * m for m in ch_mult]
         num_levels = len(channels)
 
-        # ── Encoder（下采样路径）──────────────────────────────
+        #Encoder（下采样路径）
         self.down_blocks = nn.ModuleList()
         self.downsamples = nn.ModuleList()
         curr_res = latent_size
@@ -396,7 +351,7 @@ class ConditionalUNet(nn.Module):
             else:
                 self.downsamples.append(nn.Identity())
 
-        # ── Bottleneck ────────────────────────────────────────
+        #Bottleneck
         mid_ch = channels[-1]
         self.mid_res1 = ResidualBlock(mid_ch, mid_ch, time_emb_dim,
                                       cond_ch=0,
@@ -416,7 +371,7 @@ class ConditionalUNet(nn.Module):
             num_heads=max(1, mid_ch // 64),
         )
 
-        # ── Decoder（上采样路径）──────────────────────────────
+        #Decoder（上采样路径）
         self.up_blocks  = nn.ModuleList()
         self.upsamples  = nn.ModuleList()
 
@@ -447,21 +402,14 @@ class ConditionalUNet(nn.Module):
             else:
                 self.upsamples.append(nn.Identity())
 
-        # ── 输出头 ───────────────────────────────────────────
+        # 输出头
         _g = min(8, prev_ch)
         while prev_ch % _g != 0:
             _g -= 1
         self.out_norm = nn.GroupNorm(_g, prev_ch)
         self.out_conv = nn.Conv2d(prev_ch, out_ch, 3, padding=1)
 
-    def forward(self, x: torch.Tensor, t: torch.Tensor,
-                lr_latent: torch.Tensor) -> torch.Tensor:
-        """
-        x         : (B, 4, H, W)    — 加噪的 HR latent（H=64 at base）
-        t         : (B,)             — 时间步
-        lr_latent : (B, 4, H0, W0)  — LR latent（已上采样到 HR latent 尺寸）
-                    ResidualBlock 内部会自动 bilinear resize 到当前分辨率
-        """
+    def forward(self, x: torch.Tensor, t: torch.Tensor, lr_latent: torch.Tensor) -> torch.Tensor:
         def _run_block(blk, h, time_emb, cond):
             if self.use_checkpoint:
                 from torch.utils.checkpoint import checkpoint
@@ -471,7 +419,7 @@ class ConditionalUNet(nn.Module):
         time_emb = self.time_embed(t)
         h = self.init_conv(x)
 
-        # ── Encoder ──
+        #Encoder
         skips = []
         for i, (level_blocks, down) in enumerate(zip(self.down_blocks, self.downsamples)):
             cond = F.interpolate(lr_latent, size=h.shape[-2:],
@@ -486,7 +434,7 @@ class ConditionalUNet(nn.Module):
             skips.append(h)
             h = down(h)
 
-        # ── Bottleneck ──
+        #Bottleneck
         cond_bot = F.interpolate(lr_latent, size=h.shape[-2:],
                     mode='bilinear', align_corners=False)
         h = _run_block(self.mid_res1, h, time_emb, None)
@@ -495,7 +443,7 @@ class ConditionalUNet(nn.Module):
         h = _run_block(self.mid_res2, h, time_emb, None)
         h = self.mid_cross2(h, cond_bot)         
 
-        # ── Decoder ──
+        #Decoder
         for i, (level_blocks, up) in enumerate(zip(self.up_blocks, self.upsamples)):
             h = torch.cat([h, skips.pop()], dim=1)
             cond = F.interpolate(lr_latent, size=h.shape[-2:],
@@ -513,16 +461,9 @@ class ConditionalUNet(nn.Module):
         return self.out_conv(h)
 
 
-# ═══════════════════════════════════════════════════════════════
-#  Lightweight VAE (Encoder + Decoder)
-# ═══════════════════════════════════════════════════════════════
+#VAE (Encoder + Decoder)
 
 class _VAEResBlock(nn.Module):
-    """
-    VAE 专用 ResBlock（不含 time embedding）。
-    包含残差连接：若输入输出通道不同，用 1×1 Conv 做投影。
-    支持梯度检查点（use_checkpoint=True）以节省显存。
-    """
     def __init__(self, in_ch: int, out_ch: int, use_checkpoint: bool = False):
         super().__init__()
         self.use_checkpoint = use_checkpoint
@@ -550,7 +491,6 @@ class _VAEResBlock(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if self.use_checkpoint and x.requires_grad:
-        # ✅ 实际启用梯度检查点，节省 VAE 编解码显存
             return torch_checkpoint.checkpoint(
                 self._forward, x,
                 use_reentrant=False,
@@ -558,22 +498,14 @@ class _VAEResBlock(nn.Module):
             )
         return self._forward(x)
 
-# ═══════════════════════════════════════════════════════════════
-#  LR 专用多尺度编码器（替代 VAE 做条件提取）
-# ═══════════════════════════════════════════════════════════════
+#LR 专用编码器
 
 class LREncoder(nn.Module):
-    """
-    LR 条件专用编码器，带像素级跳跃连接保留高频细节。
-    输入  : (B, 3, lr_size, lr_size)
-    输出  : (B, out_ch, lr_size//4, lr_size//4)
-    """
     def __init__(self, in_ch: int = 3, out_ch: int = 64,
                  base_ch: int = 32, use_checkpoint: bool = False):
         super().__init__()
         self.use_checkpoint = use_checkpoint
 
-        # 主干：两次步长卷积
         self.body = nn.Sequential(
             nn.Conv2d(in_ch, base_ch, 3, padding=1),
             nn.SiLU(),
@@ -728,9 +660,7 @@ class VAEDecoder(nn.Module):
         return self.out(h)
 
 
-# ═══════════════════════════════════════════════════════════════
-#  DDPM Noise Scheduler
-# ═══════════════════════════════════════════════════════════════
+#DDPM
 
 class DDPMScheduler(nn.Module):  
     def __init__(self, num_timesteps: int = 1000,
@@ -753,7 +683,6 @@ class DDPMScheduler(nn.Module):
         alphas_cumprod_prev = F.pad(alphas_cumprod[:-1], (1, 0), value=1.0)
         posterior_var      = betas * (1 - alphas_cumprod_prev) / (1 - alphas_cumprod)
 
-        # register_buffer：自动跟随 .to(device)
         self.register_buffer('betas',                        betas)
         self.register_buffer('alphas_cumprod',               alphas_cumprod)
         self.register_buffer('alphas_cumprod_prev',          alphas_cumprod_prev)
@@ -772,7 +701,6 @@ class DDPMScheduler(nn.Module):
                              alphas_cumprod / (1.0 - alphas_cumprod).clamp(min=1e-10))
 
     def _get(self, name: str, t: torch.Tensor, shape) -> torch.Tensor:
-        # 直接 getattr，无需 .to(t.device)
         vals = getattr(self, name)
         out  = vals.gather(0, t)
         return out.reshape(len(t), *((1,) * (len(shape) - 1)))
@@ -807,9 +735,7 @@ class DDPMScheduler(nn.Module):
         nonzero = (t > 0).float().reshape(len(t), *([1] * (x_t.ndim - 1)))
         return mean + nonzero * (0.5 * log_var).exp() * noise
 
-# ═══════════════════════════════════════════════════════════════
 #  Full Latent SR3 Model（改：encode_mean + Min-SNR-γ）
-# ═══════════════════════════════════════════════════════════════
 
 class LatentSR3(nn.Module):
 
@@ -846,13 +772,7 @@ class LatentSR3(nn.Module):
         self.hr_latent_size = hr_size // self.vae_factor     
         self.lr_latent_size = lr_size // self.vae_factor     
 
-        # 安全校验：lr_latent_size 太小则条件无意义
-        assert self.hr_latent_size >= 4, \
-            f"hr_latent_size={self.hr_latent_size} 太小，请减少 vae_ch_mult 层数"
-        assert self.lr_latent_size >= 1, \
-            f"lr_latent_size={self.lr_latent_size} < 1，LR 被过度压缩，请减少 vae_ch_mult 层数"
-
-        # ── VAE ──
+        #VAE
         self.encoder = VAEEncoder(
             in_ch=3, latent_ch=latent_ch,
             base_ch=vae_base_ch, ch_mult=vae_ch_mult,
@@ -866,17 +786,16 @@ class LatentSR3(nn.Module):
             use_checkpoint=vae_gradient_checkpointing,
         )
 
-        # 下采样 4×，输出 lr_size//4 的特征图（比 VAE 的 16× 保留更多空间信息）
+        # 下采样
         self.lr_enc_ch = lr_enc_ch
         self.lr_encoder = LREncoder(
             in_ch=3, out_ch=lr_enc_ch,
             base_ch=lr_enc_base_ch,
             use_checkpoint=gradient_checkpointing,
         )
-        # LREncoder 输出尺寸：lr_size//4，e.g. 64//4 = 16
         self.lr_feat_size = lr_size // 4
 
-        # ── 去噪 UNet（cond_ch 改用 lr_enc_ch）──
+        #去噪 UNet
         self.unet = ConditionalUNet(
             in_ch=latent_ch,
             out_ch=latent_ch,
@@ -889,11 +808,11 @@ class LatentSR3(nn.Module):
             use_checkpoint=gradient_checkpointing,
         )
 
-        # ── DDPM 调度器 ──
+        #DDPM 调度器
         self.scheduler = DDPMScheduler(num_timesteps=num_timesteps)
         self.T = num_timesteps
 
-    # ── VAE 工具 ─────────────────────────────────────────────
+    #VAE 工具
 
     def encode(self, img: torch.Tensor) -> torch.Tensor:
         return self.encoder.sample(img)
@@ -905,23 +824,14 @@ class LatentSR3(nn.Module):
     def decode(self, z: torch.Tensor) -> torch.Tensor:
         return self.decoder(z)
 
-    # ── LR 条件准备（核心改动）────────────────────────────────
 
     def prepare_lr_cond(self, lr_img: torch.Tensor) -> torch.Tensor:
         """
-        用 LREncoder 直接从像素空间提取特征，下采样 4×
-        
-        lr_img  : (B, 3, 64, 64)
-        返回    : (B, lr_enc_ch, 16, 16)  — 256点，比原来 16点多16×
-        
-        CrossAttentionCondBlock 内部会自动 bilinear resize 到各层分辨率，
-        所以这里只需返回 LREncoder 的输出，不需要手动 upsample。
+        用 LREncoder 直接从像素空间提取特征，下采样
         """
-        # LREncoder 本身不需要 no_grad（它在 diffusion 训练阶段被冻结时
-        # 由 _freeze_vae 一并处理，如果想联合微调可以放开）
         return self.lr_encoder(lr_img)
 
-    # ── 训练 forward ─────────────────────────────────────────
+    #训练 forward
 
     def forward(self, hr_img: torch.Tensor, lr_img: torch.Tensor) -> torch.Tensor:
         B      = hr_img.size(0)
@@ -958,15 +868,9 @@ class LatentSR3(nn.Module):
 
         return diff_loss + 1e-4 * kl_loss
 
-    # ── DDPM 全步推理 ────────────────────────────────────────
-
+    #DDPM 全步推理
     @torch.no_grad()
-    def sample(self, lr_img: torch.Tensor,
-               num_inference_steps: Optional[int] = None) -> torch.Tensor:
-        """
-        完整 DDPM 反向扩散推理。
-        lr_img : (B, 3, 64, 64) in [-1, 1]
-        """
+    def sample(self, lr_img: torch.Tensor, num_inference_steps: Optional[int] = None) -> torch.Tensor:
         B      = lr_img.size(0)
         device = lr_img.device
         steps  = num_inference_steps or self.T
@@ -986,18 +890,10 @@ class LatentSR3(nn.Module):
 
         return self.decode(z)
 
-    # ── DDIM 快速推理 ────────────────────────────────────────
+    #DDIM 快速推理
 
     @torch.no_grad()
-    def sample_ddim(self, lr_img: torch.Tensor,
-                    num_steps: int = 200, eta: float = 0.0) -> torch.Tensor:
-        """
-        DDIM 确定性采样（默认 200 步）。
-        lr_img    : (B, 3, 64, 64)
-        num_steps : 推理步数，推荐 100~200，不要超过 T
-        eta       : 随机性，0=完全确定性 DDIM
-        """
-        # 保证 num_steps <= T，避免 linspace 产生重复步骤
+    def sample_ddim(self, lr_img: torch.Tensor, num_steps: int = 200, eta: float = 0.0) -> torch.Tensor:
         num_steps = min(num_steps, self.T)
 
         B      = lr_img.size(0)
@@ -1038,12 +934,8 @@ class LatentSR3(nn.Module):
         return self.decode(z)
 
 
-# ═══════════════════════════════════════════════════════════════
-#  简单数据集（保留，供快速测试用）
-# ═══════════════════════════════════════════════════════════════
-
 class SRDataset(Dataset):
-    """简单配对 SR 数据集，LR 由 HR 双三次下采样生成。"""
+    """配对 SR 数据集，LR 由 HR 双三次下采样生成。"""
 
     def __init__(self, hr_paths: List[str]):
         self.hr_paths    = hr_paths
@@ -1070,13 +962,9 @@ class SRDataset(Dataset):
         return self.lr_transform(img), self.hr_transform(img)
 
 
-# ═══════════════════════════════════════════════════════════════
-#  Sanity Check
-# ═══════════════════════════════════════════════════════════════
-
 def run_sanity_check():
     print("=" * 60)
-    print("  Latent SR3  —  Sanity Check  (LR 64×64 → HR 512×512)")
+    print("  Latent SR3")
     print("=" * 60)
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"  Device : {device}\n")
@@ -1109,28 +997,28 @@ def run_sanity_check():
     # VAE 编解码
     z   = model.encode_mean(hr_img[:1])
     rec = model.decode(z)
-    print(f"  VAE latent shape : {tuple(z.shape)}  ✓")
-    print(f"  VAE recon  shape : {tuple(rec.shape)}  ✓")
+    print(f"  VAE latent shape : {tuple(z.shape)} ")
+    print(f"  VAE recon  shape : {tuple(rec.shape)} ")
 
     # PSNR / SSIM
     psnr = compute_psnr(rec, hr_img[:1])
     ssim = compute_ssim(rec, hr_img[:1])
-    print(f"  Random PSNR      : {psnr:.2f} dB  ✓")
-    print(f"  Random SSIM      : {ssim:.4f}    ✓")
+    print(f"  Random PSNR      : {psnr:.2f} dB ")
+    print(f"  Random SSIM      : {ssim:.4f}")
 
-    # LPIPS（可选，首次会下载 VGG 权重）
+    # LPIPS（可选）
     try:
         lpips_fn = LPIPSLoss().to(device)
         pl = lpips_fn(rec, hr_img[:1])
-        print(f"  LPIPS loss       : {pl.item():.5f}  ✓")
+        print(f"  LPIPS loss       : {pl.item():.5f} ")
     except Exception as e:
         print(f"  LPIPS skip       : {e}")
 
-    # Min-SNR-γ 权重验证
+    # Min-SNR 权重验证
     T = model.T
     t_batch = torch.tensor([0, T // 2, T - 1], dtype=torch.long, device=device)
     w = model.scheduler.snr_weights(t_batch, gamma=5.0)
-    print(f"  Min-SNR weights (t=0, T/2, T-1): {w.tolist()}  ✓")
+    print(f"  Min-SNR weights (t=0, T/2, T-1): {w.tolist()} ")
 
     print("\nAll checks passed!")
 
